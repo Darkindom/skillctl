@@ -1,6 +1,6 @@
 # skillctl PRD
 
-Status: ready-for-agent
+Status: implemented
 
 ## Problem Statement
 

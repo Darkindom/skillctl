@@ -6,7 +6,7 @@ It uses a central skill library and exposes skills to platform-specific roots wi
 
 ## Status
 
-MVP implementation in progress for the first local filesystem-only milestone.
+MVP implementation ready for review for the first local filesystem-only milestone.
 
 ## Defaults
 
