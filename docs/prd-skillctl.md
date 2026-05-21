@@ -10,7 +10,7 @@ The user needs a simple local CLI that can show what skills exist, identify dupl
 
 ## Solution
 
-Build `skillctl`, a TypeScript and Node.js CLI for local skill management.
+Build `skillctl`, a TypeScript and Node.js CLI plus local browser dashboard for local skill management.
 
 The first version manages local filesystem skills only. It uses `~/.agents/skills` as the central skill library and treats platform-specific skills directories as target roots. Enabling a skill creates a symbolic link from a platform root to the central library. Disabling a skill removes only symbolic links. Duplicate removal is explicit: the user chooses which duplicate skill to keep, and `skillctl` backs up the other entries, records their original paths, then removes them.
 
@@ -26,7 +26,7 @@ The CLI should support:
 - Restoring a backup when doing so is safe.
 - Previewing write operations with dry-run mode.
 
-The first version intentionally avoids GitHub import, update management, GUI, database storage, and automatic merge behavior.
+The first version intentionally avoids GitHub import, update management, packaged desktop GUI, database storage, and automatic merge behavior.
 
 ## User Stories
 
@@ -60,8 +60,8 @@ The first version intentionally avoids GitHub import, update management, GUI, da
 28. As a developer, I want platform system skills to be read-only, so that the tool does not alter bundled or platform-owned skill packages.
 29. As a developer, I want Cursor's nested skill conventions to be represented as multiple roots, so that nested layouts do not become hard-coded special cases.
 30. As a developer, I want the first version to avoid GitHub import, so that local filesystem behavior can be made reliable before adding network and source metadata.
-31. As a developer, I want the first version to be a CLI rather than a GUI, so that the core skill management model can be built and tested quickly.
-32. As a future GUI implementer, I want the core behavior to live behind testable modules, so that a desktop interface can reuse the same logic later.
+31. As a developer, I want the first version to include a CLI and a local web management page, so that both scripted usage and interactive daily management are practical.
+32. As a future GUI implementer, I want the core behavior to live behind testable modules, so that a packaged desktop interface can reuse the same logic later.
 33. As a script author, I want stable human-readable command output, so that daily usage is clear without needing JSON output in the first version.
 34. As a user who prefers conservative tools, I want `skillctl` to reject ambiguous operations, so that I am forced to resolve duplicates or conflicts explicitly.
 35. As a maintainer, I want filesystem behavior to be covered by integration tests, so that path handling, symbolic links, backup, and restore behavior do not regress.
@@ -69,7 +69,7 @@ The first version intentionally avoids GitHub import, update management, GUI, da
 ## Implementation Decisions
 
 - The product name and CLI command are both `skillctl`.
-- The first version is a local CLI, not a Tauri desktop app.
+- The first version is a local CLI plus a local browser-based web dashboard, not a Tauri desktop app.
 - The implementation will use TypeScript and Node.js with ECMAScript modules.
 - Dependencies should be minimal. Command parsing may use a small CLI library; the rest should rely on Node standard library capabilities.
 - The tool will use `~/.agents/skills` as the central skill library.
@@ -119,6 +119,19 @@ The first version intentionally avoids GitHub import, update management, GUI, da
 - Write commands support dry-run mode.
 - Dry-run mode reports planned filesystem changes without creating, deleting, or restoring anything.
 - Query commands do not need JSON output in the first version.
+- The web dashboard should not be a one-to-one visual copy of CLI commands.
+- The web dashboard should expose task-oriented controls:
+  - Row-level `Detail` plus target-platform `Enable` / `Disable` actions for each skill.
+  - Selection checkboxes for multi-skill operations.
+  - Left-side action panel for batch enable, batch disable, duplicate inspection, backup listing, and latest-backup restore.
+  - Right-side top controls for search, target platform selection, and `All` / `Enabled` / `Missing` / `Duplicates` filters.
+- The web dashboard should expose platform status with product terms only: `linked`, `missing`, and `duplicate`.
+- `linked` means the platform skill is a symlink to the central library.
+- `missing` means the platform managed root does not contain that skill.
+- `duplicate` means the platform managed root contains a same-named real directory rather than a managed symlink.
+- The web dashboard targets desktop browser usage only; narrow mobile layouts are not a first-version requirement.
+- Web actions that mutate skill files must require an explicit confirmation dialog before execution.
+- Web actions should reuse the same conservative filesystem operations as the CLI.
 - GitHub import, source tracking, update checks, and marketplace browsing are out of scope for the first version.
 - The code should be organized around deep modules for root configuration, skill discovery, filesystem operations, duplicate resolution, backup/restore, and CLI command orchestration.
 - Filesystem mutation should be isolated behind a small interface so tests can exercise real temporary directories without depending on the user's home directory.
@@ -149,11 +162,11 @@ The first version intentionally avoids GitHub import, update management, GUI, da
 - Dry-run tests should verify that write commands report intended actions without changing the filesystem.
 - CLI smoke tests should verify the main commands parse expected flags and delegate to the correct behavior.
 - Node's built-in test runner is sufficient for the first version.
-- No browser or GUI tests are needed for the first version.
+- Web tests should verify the dashboard exposes the agreed management controls and that web actions delegate to the same filesystem behavior as the CLI.
 
 ## Out of Scope
 
-- Tauri or any other desktop GUI.
+- Tauri or any other packaged desktop GUI.
 - GitHub import.
 - GitHub authentication.
 - Marketplace browsing.
@@ -168,6 +181,7 @@ The first version intentionally avoids GitHub import, update management, GUI, da
 - Publishing to npm.
 - Installer packaging.
 - Support for non-`SKILL.md` skill formats.
+- Mobile-specific responsive layout work.
 - Editing skill contents.
 - Creating new skills.
 - Validating skill quality beyond basic metadata parsing.
@@ -178,4 +192,4 @@ The first version intentionally avoids GitHub import, update management, GUI, da
 - The tool should avoid treating any platform as a one-off special case. Differences between Codex, Claude, Cursor, and future tools should be expressed through root configuration.
 - Cursor-style nested roots are a representative case for the root-based model: the configured root may itself be nested, while skill discovery inside that root remains flat.
 - The first version should keep user-facing terminology simple. Use "duplicate" and "restore" rather than implementation terms like "dedupe" or "transaction".
-- The PRD intentionally captures the first local CLI milestone. Later milestones can add GitHub import and a GUI once the filesystem model is stable.
+- The PRD intentionally captures the first local filesystem milestone. Later milestones can add GitHub import and packaged desktop distribution once the filesystem model is stable.
