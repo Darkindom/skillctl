@@ -154,6 +154,43 @@ export async function removeDuplicateSkill(
   };
 }
 
+export async function resolveDuplicateSkill(
+  options: OperationOptions,
+  skill: string,
+  keepPath: string,
+): Promise<OperationResult> {
+  const duplicate = (await findDuplicates({ home: options.home })).find((candidate) => candidate.name === skill);
+  if (!duplicate) {
+    throw new Error(`No duplicate skill found: ${skill}`);
+  }
+
+  const keepLocation = duplicate.locations.find((location) => location.path === keepPath);
+  const result = await removeDuplicateSkill(options, skill, keepPath);
+  if (keepLocation?.rootRole !== "library") {
+    return result;
+  }
+
+  const linkedPaths: string[] = [];
+  for (const location of duplicate.locations) {
+    if (location.path === keepPath || location.rootRole !== "managed") {
+      continue;
+    }
+
+    linkedPaths.push(location.path);
+    if (!options.dryRun) {
+      await mkdir(dirname(location.path), { recursive: true });
+      await symlink(keepPath, location.path, "dir");
+    }
+  }
+
+  return {
+    message:
+      linkedPaths.length === 0
+        ? result.message
+        : `${result.message}\n${options.dryRun ? "Would link" : "Linked"}: ${linkedPaths.join(", ")}`,
+  };
+}
+
 export async function listBackups(options: OperationOptions): Promise<ListedBackup[]> {
   const config = await loadConfig(options.home);
   const backupsRoot = join(config.stateRoot, "backups");
@@ -291,7 +328,10 @@ async function validateRestore(options: OperationOptions, manifest: BackupManife
     }
   }
 
-  for (const name of entryNames) {
+  const directoryEntryNames = new Set(
+    manifest.entries.filter((entry) => entry.kind === "directory").map((entry) => basename(entry.originalPath)),
+  );
+  for (const name of directoryEntryNames) {
     const existingLocations = (await findExistingSkillPaths(options.home, name)).filter(
       (path) => !manifest.entries.some((entry) => entry.originalPath === path),
     );

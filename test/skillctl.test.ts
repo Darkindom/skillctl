@@ -77,7 +77,7 @@ test("package metadata points to the compiled CLI entry", async () => {
   assert.equal(packageJson.scripts.start, "node dist/src/cli.js");
 });
 
-test("web server serves dashboard HTML and skills API", async () => {
+test("web server serves the platform-focused dashboard shell and skills API", async () => {
   const home = join(tmpdir(), `skillctl-${Date.now()}-${Math.random()}`);
   const skill = join(home, ".agents", "skills", "tdd");
   await mkdir(skill, { recursive: true });
@@ -94,32 +94,45 @@ test("web server serves dashboard HTML and skills API", async () => {
 
     const html = await (await fetch(baseUrl)).text();
     assert.match(html, /<title>skillctl<\/title>/);
+    assert.match(html, /aria-label="Primary navigation"/);
+    assert.match(html, /data-view="skills"/);
+    assert.match(html, /data-view="duplicates"/);
+    assert.match(html, /data-view="backups"/);
+    assert.match(html, /data-view="settings"/);
     assert.match(html, /id="skills-table"/);
-    assert.match(html, /id="detail-dialog"/);
+    assert.match(html, /id="detail-drawer"/);
     assert.match(html, /id="search"/);
     assert.match(html, /id="platform-select"/);
-    assert.match(html, /class="toolbar"/);
-    assert.match(html, /Actions/);
+    assert.match(html, /Target status/);
     assert.match(html, /id="bulk-enable"/);
     assert.match(html, /id="bulk-disable"/);
-    assert.match(html, /data-action="find-duplicates"/);
+    assert.match(html, /id="duplicates-view"/);
+    assert.match(html, /id="backups-view"/);
+    assert.match(html, /id="settings-view"/);
     assert.match(html, /data-row-action="enable"/);
     assert.match(html, /data-row-action="disable"/);
+    assert.match(html, /Resolve duplicate/);
     assert.match(html, /data-dangerous="true"/);
     assert.match(html, /id="confirm-dialog"/);
-    assert.match(html, /id="operation-output"/);
     assert.match(html, /Detail/);
     assert.match(html, /linked/);
+    assert.match(html, /missing/);
     assert.match(html, /duplicate/);
+    assert.doesNotMatch(html, /id="operation-output"/);
+    assert.doesNotMatch(html, /<h2[^>]*>Actions<\/h2>/);
     assert.doesNotMatch(html, />Present</);
+    assert.doesNotMatch(html, />symlink</);
 
     const payload = (await (await fetch(`${baseUrl}/api/skills`)).json()) as {
       skills: Array<{ name: string; description: string }>;
+      config: { libraryRoot: string; platforms: Record<string, { roots: Array<{ id: string; role: string }> }> };
       summary: { total: number };
     };
     assert.equal(payload.summary.total, 1);
     assert.equal(payload.skills[0].name, "tdd");
     assert.equal(payload.skills[0].description, "Test-driven development");
+    assert.equal(payload.config.libraryRoot, join(home, ".agents", "skills"));
+    assert.equal(payload.config.platforms.codex.roots[0].role, "managed");
   } finally {
     await new Promise<void>((resolve, reject) =>
       server.close((error: Error | undefined) => {
@@ -160,6 +173,206 @@ test("web action API enables a skill for a platform", async () => {
     assert.equal(response.status, 200);
     assert.match(payload.message, /Created symlink/);
     assert.equal((await lstat(target)).isSymbolicLink(), true);
+  } finally {
+    await new Promise<void>((resolve, reject) =>
+      server.close((error: Error | undefined) => {
+        if (error) {
+          reject(error);
+        } else {
+          resolve();
+        }
+      }),
+    );
+  }
+});
+
+test("web action API resolves duplicates with a keep path, links managed targets, and restores the backup by id", async () => {
+  const home = join(tmpdir(), `skillctl-${Date.now()}-${Math.random()}`);
+  const librarySkill = join(home, ".agents", "skills", "tdd");
+  const codexSkill = join(home, ".codex", "skills", "tdd");
+  await mkdir(librarySkill, { recursive: true });
+  await mkdir(codexSkill, { recursive: true });
+  await writeFile(join(librarySkill, "SKILL.md"), "---\nname: tdd\n---\n");
+  await writeFile(join(codexSkill, "SKILL.md"), "---\nname: tdd codex\n---\n");
+  const server = createWebServer({ home });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+
+  try {
+    const address = server.address();
+    if (typeof address !== "object" || !address) {
+      throw new Error("Expected server to listen on a TCP port");
+    }
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+
+    const resolveResponse = await fetch(`${baseUrl}/api/actions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ type: "resolve-duplicate", skill: "tdd", keepPath: librarySkill }),
+    });
+    const resolvePayload = (await resolveResponse.json()) as { message: string };
+    const backupId = resolvePayload.message.match(/Backup:\s+(\S+)/)?.[1];
+
+    assert.equal(resolveResponse.status, 200);
+    assert.match(resolvePayload.message, /Removed duplicates for tdd/);
+    assert.match(resolvePayload.message, /Linked:/);
+    assert.ok(backupId);
+    assert.equal((await lstat(librarySkill)).isDirectory(), true);
+    assert.equal((await lstat(codexSkill)).isSymbolicLink(), true);
+    assert.equal(await readlink(codexSkill), librarySkill);
+
+    await rm(codexSkill);
+    await rm(librarySkill, { recursive: true });
+    const restoreResponse = await fetch(`${baseUrl}/api/actions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ type: "restore-backup", backupId }),
+    });
+    const restorePayload = (await restoreResponse.json()) as { message: string };
+
+    assert.equal(restoreResponse.status, 200);
+    assert.match(restorePayload.message, new RegExp(escapeRegExp(`Restored backup: ${backupId}`)));
+    assert.equal((await lstat(codexSkill)).isDirectory(), true);
+    assert.match(await readFile(join(codexSkill, "SKILL.md"), "utf8"), /tdd codex/);
+  } finally {
+    await new Promise<void>((resolve, reject) =>
+      server.close((error: Error | undefined) => {
+        if (error) {
+          reject(error);
+        } else {
+          resolve();
+        }
+      }),
+    );
+  }
+});
+
+test("web duplicate resolution preserves linked symlinks and enable keeps the skill non-duplicate", async () => {
+  const home = join(tmpdir(), `skillctl-${Date.now()}-${Math.random()}`);
+  const librarySkill = join(home, ".agents", "skills", "grill-me");
+  const codexSkill = join(home, ".codex", "skills", "grill-me");
+  const claudeSkill = join(home, ".claude", "skills", "grill-me");
+  await mkdir(librarySkill, { recursive: true });
+  await mkdir(codexSkill, { recursive: true });
+  await mkdir(join(home, ".claude", "skills"), { recursive: true });
+  await writeFile(join(librarySkill, "SKILL.md"), "---\nname: grill-me\n---\n");
+  await writeFile(join(codexSkill, "SKILL.md"), "---\nname: grill-me codex copy\n---\n");
+  await symlink(librarySkill, claudeSkill, "dir");
+  const server = createWebServer({ home });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+
+  try {
+    const address = server.address();
+    if (typeof address !== "object" || !address) {
+      throw new Error("Expected server to listen on a TCP port");
+    }
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+
+    const resolveResponse = await fetch(`${baseUrl}/api/actions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ type: "resolve-duplicate", skill: "grill-me", keepPath: librarySkill }),
+    });
+
+    assert.equal(resolveResponse.status, 200);
+    assert.equal((await lstat(codexSkill)).isSymbolicLink(), true);
+    assert.equal(await readlink(codexSkill), librarySkill);
+    assert.equal((await lstat(claudeSkill)).isSymbolicLink(), true);
+
+    const payload = (await (await fetch(`${baseUrl}/api/skills`)).json()) as {
+      skills: Array<{ name: string; duplicate: boolean; platforms: Record<string, string> }>;
+      duplicates: Array<{ name: string }>;
+    };
+    const skill = payload.skills.find((candidate) => candidate.name === "grill-me");
+
+    assert.ok(skill);
+    assert.equal(skill.duplicate, false);
+    assert.equal(skill.platforms.codex, "symlink");
+    assert.equal(skill.platforms.claude, "symlink");
+    assert.equal(payload.duplicates.some((duplicate) => duplicate.name === "grill-me"), false);
+  } finally {
+    await new Promise<void>((resolve, reject) =>
+      server.close((error: Error | undefined) => {
+        if (error) {
+          reject(error);
+        } else {
+          resolve();
+        }
+      }),
+    );
+  }
+});
+
+test("web action API resolves all auto-resolvable duplicates and skips ambiguous groups", async () => {
+  const home = join(tmpdir(), `skillctl-${Date.now()}-${Math.random()}`);
+  const libraryTdd = join(home, ".agents", "skills", "tdd");
+  const codexTdd = join(home, ".codex", "skills", "tdd");
+  const libraryDiagnose = join(home, ".agents", "skills", "diagnose");
+  const codexDiagnose = join(home, ".codex", "skills", "diagnose");
+  const claudeDiagnose = join(home, ".claude", "skills", "diagnose");
+  const codexLocalOnly = join(home, ".codex", "skills", "local-only");
+  const claudeLocalOnly = join(home, ".claude", "skills", "local-only");
+  await mkdir(libraryTdd, { recursive: true });
+  await mkdir(codexTdd, { recursive: true });
+  await mkdir(libraryDiagnose, { recursive: true });
+  await mkdir(codexDiagnose, { recursive: true });
+  await mkdir(claudeDiagnose, { recursive: true });
+  await mkdir(codexLocalOnly, { recursive: true });
+  await mkdir(claudeLocalOnly, { recursive: true });
+  await writeFile(join(libraryTdd, "SKILL.md"), "---\nname: tdd\n---\n");
+  await writeFile(join(codexTdd, "SKILL.md"), "---\nname: tdd codex copy\n---\n");
+  await writeFile(join(libraryDiagnose, "SKILL.md"), "---\nname: diagnose\n---\n");
+  await writeFile(join(codexDiagnose, "SKILL.md"), "---\nname: diagnose codex copy\n---\n");
+  await writeFile(join(claudeDiagnose, "SKILL.md"), "---\nname: diagnose claude copy\n---\n");
+  await writeFile(join(codexLocalOnly, "SKILL.md"), "---\nname: local only codex\n---\n");
+  await writeFile(join(claudeLocalOnly, "SKILL.md"), "---\nname: local only claude\n---\n");
+  const server = createWebServer({ home });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+
+  try {
+    const address = server.address();
+    if (typeof address !== "object" || !address) {
+      throw new Error("Expected server to listen on a TCP port");
+    }
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+
+    const html = await (await fetch(baseUrl)).text();
+    assert.match(html, /id="resolve-all-duplicates"/);
+    assert.match(html, /Resolve all duplicates/);
+    assert.match(html, /Show all/);
+
+    const response = await fetch(`${baseUrl}/api/actions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ type: "resolve-all-duplicates" }),
+    });
+    const payload = (await response.json()) as {
+      message: string;
+      resolved: Array<{ skill: string; backupId: string }>;
+      skipped: Array<{ skill: string; reason: string }>;
+      failed: Array<{ skill: string; error: string }>;
+    };
+
+    assert.equal(response.status, 200);
+    assert.match(payload.message, /Resolved 2 duplicates/);
+    assert.deepEqual(
+      payload.resolved.map((result) => result.skill).sort(),
+      ["diagnose", "tdd"],
+    );
+    assert.ok(payload.resolved.every((result) => result.backupId.length > 0));
+    assert.deepEqual(payload.skipped, [
+      { skill: "local-only", reason: "No central library copy found." },
+    ]);
+    assert.deepEqual(payload.failed, []);
+    assert.equal((await lstat(codexTdd)).isSymbolicLink(), true);
+    assert.equal(await readlink(codexTdd), libraryTdd);
+    assert.equal((await lstat(codexDiagnose)).isSymbolicLink(), true);
+    assert.equal(await readlink(codexDiagnose), libraryDiagnose);
+    assert.equal((await lstat(claudeDiagnose)).isSymbolicLink(), true);
+    assert.equal(await readlink(claudeDiagnose), libraryDiagnose);
+    assert.equal((await lstat(libraryTdd)).isDirectory(), true);
+    assert.equal((await lstat(libraryDiagnose)).isDirectory(), true);
+    assert.equal((await lstat(codexLocalOnly)).isDirectory(), true);
+    assert.equal((await lstat(claudeLocalOnly)).isDirectory(), true);
   } finally {
     await new Promise<void>((resolve, reject) =>
       server.close((error: Error | undefined) => {
@@ -384,7 +597,7 @@ test("CLI dry-runs duplicate removal without deleting or creating a backup", asy
   await assert.rejects(lstat(join(home, ".agents", "skillctl", "backups")), { code: "ENOENT" });
 });
 
-test("CLI removes duplicate symlinks by recording link metadata", async () => {
+test("CLI does not treat linked platform symlinks as duplicate skills", async () => {
   const home = join(tmpdir(), `skillctl-${Date.now()}-${Math.random()}`);
   const librarySkill = join(home, ".agents", "skills", "tdd");
   const codexSkill = join(home, ".codex", "skills", "tdd");
@@ -393,18 +606,14 @@ test("CLI removes duplicate symlinks by recording link metadata", async () => {
   await writeFile(join(librarySkill, "SKILL.md"), "---\nname: tdd\n---\n");
   await symlink(librarySkill, codexSkill, "dir");
 
-  const result = await runCli(["rm-duplicate", "tdd", "--keep", librarySkill], { SKILLCTL_HOME: home });
+  const duplicateResult = await runCli(["duplicates"], { SKILLCTL_HOME: home });
+  const removeResult = await runCli(["rm-duplicate", "tdd", "--keep", librarySkill], { SKILLCTL_HOME: home });
 
-  assert.equal(result.code, 0);
-  await assert.rejects(lstat(codexSkill), { code: "ENOENT" });
-  const backupId = result.stdout.match(/Backup:\s+(\S+)/)?.[1];
-  assert.ok(backupId);
-  const manifest = JSON.parse(
-    await readFile(join(home, ".agents", "skillctl", "backups", backupId, "manifest.json"), "utf8"),
-  );
-  assert.equal(manifest.entries[0].kind, "symlink");
-  assert.equal(manifest.entries[0].originalPath, codexSkill);
-  assert.equal(manifest.entries[0].linkTarget, librarySkill);
+  assert.equal(duplicateResult.code, 0);
+  assert.match(duplicateResult.stdout, /No duplicates found/);
+  assert.equal(removeResult.code, 1);
+  assert.match(removeResult.stderr, /No duplicate skill found: tdd/);
+  assert.equal((await lstat(codexSkill)).isSymbolicLink(), true);
 });
 
 test("CLI lists available backups", async () => {
@@ -492,14 +701,28 @@ test("CLI restores a backed up symlink with its original target", async () => {
   const home = join(tmpdir(), `skillctl-${Date.now()}-${Math.random()}`);
   const librarySkill = join(home, ".agents", "skills", "tdd");
   const codexSkill = join(home, ".codex", "skills", "tdd");
+  const backupId = "manual-symlink-backup";
+  const backupRoot = join(home, ".agents", "skillctl", "backups", backupId);
   await mkdir(librarySkill, { recursive: true });
   await mkdir(join(home, ".codex", "skills"), { recursive: true });
   await writeFile(join(librarySkill, "SKILL.md"), "---\nname: tdd\n---\n");
-  await symlink(librarySkill, codexSkill, "dir");
-  const removeResult = await runCli(["rm-duplicate", "tdd", "--keep", librarySkill], { SKILLCTL_HOME: home });
-  const backupId = removeResult.stdout.match(/Backup:\s+(\S+)/)?.[1];
-  assert.ok(backupId);
-  await rm(librarySkill, { recursive: true });
+  await mkdir(backupRoot, { recursive: true });
+  await writeFile(
+    join(backupRoot, "manifest.json"),
+    JSON.stringify({
+      id: backupId,
+      type: "rm-duplicate",
+      skill: "tdd",
+      keepPath: librarySkill,
+      entries: [
+        {
+          originalPath: codexSkill,
+          kind: "symlink",
+          linkTarget: librarySkill,
+        },
+      ],
+    }),
+  );
 
   const result = await runCli(["restore", backupId], { SKILLCTL_HOME: home });
 

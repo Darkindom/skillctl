@@ -115,9 +115,14 @@ export async function findDuplicates(options: ListSkillsOptions): Promise<Duplic
   for (const [platform, platformConfig] of Object.entries(config.platforms)) {
     for (const root of platformConfig.roots) {
       for (const name of await readSkillDirs(root.path)) {
+        const skillPath = join(root.path, name);
+        if (await isLinkedSkill(skillPath)) {
+          continue;
+        }
+
         locations.push({
           name,
-          path: join(root.path, name),
+          path: skillPath,
           platform,
           rootId: root.id,
           rootRole: root.role,
@@ -161,6 +166,14 @@ async function readSkillDirs(root: string): Promise<string[]> {
     return skillDirs;
   } catch {
     return [];
+  }
+}
+
+async function isLinkedSkill(path: string): Promise<boolean> {
+  try {
+    return (await lstat(path)).isSymbolicLink();
+  } catch {
+    return false;
   }
 }
 
