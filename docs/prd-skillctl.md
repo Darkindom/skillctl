@@ -14,6 +14,8 @@ Build `skillctl`, a TypeScript and Node.js CLI plus local browser dashboard for 
 
 The first version manages local filesystem skills only. It uses `~/.agents/skills` as the central skill library and treats platform-specific skills directories as target roots. Enabling a skill creates a symbolic link from a platform root to the central library. Disabling a skill removes only symbolic links. Duplicate removal is explicit: the user chooses which duplicate skill to keep, and `skillctl` backs up the other entries, records their original paths, then removes them.
 
+The web dashboard provides a higher-level duplicate resolution workflow on top of the same conservative backup model. In the dashboard, resolving a duplicate that keeps the central library copy should back up platform-owned real directories and replace them with symbolic links, so the platform ends in the `linked` state rather than the `missing` state. Existing symbolic links are already managed links and should not be treated as duplicates.
+
 The CLI should support:
 
 - Listing central skills and showing platform enablement status.
@@ -65,6 +67,13 @@ The first version intentionally avoids GitHub import, update management, package
 33. As a script author, I want stable human-readable command output, so that daily usage is clear without needing JSON output in the first version.
 34. As a user who prefers conservative tools, I want `skillctl` to reject ambiguous operations, so that I am forced to resolve duplicates or conflicts explicitly.
 35. As a maintainer, I want filesystem behavior to be covered by integration tests, so that path handling, symbolic links, backup, and restore behavior do not regress.
+36. As a daily dashboard user, I want a dedicated duplicates page, so that duplicate cleanup is not mixed into the normal skills list.
+37. As a dashboard user, I want `linked`, `missing`, and `duplicate` to be the only platform status terms, so that I do not need to understand implementation names like `present` or `symlink`.
+38. As a dashboard user, I want `linked` skills to be excluded from duplicate counts, so that healthy platform links do not look like problems.
+39. As a dashboard user, I want resolving a duplicate to leave the skill enabled when the central library copy is kept, so that cleanup does not force an extra enable step.
+40. As a dashboard user, I want to resolve all central-library-backed duplicates in one action, so that I can clean up common duplicate states quickly.
+41. As a cautious user, I want bulk duplicate resolution to skip ambiguous duplicate groups without a central library copy, so that the tool never guesses which platform copy is canonical.
+42. As a cautious user, I want bulk duplicate resolution to show resolved, skipped, and failed items separately, so that I can understand exactly what changed.
 
 ## Implementation Decisions
 
@@ -99,10 +108,11 @@ The first version intentionally avoids GitHub import, update management, package
 - Enabling a skill creates a symbolic link from a managed platform root to the central library skill directory.
 - Enabling does not support copying skill contents.
 - Enabling fails if the target path already exists.
-- Enabling does not resolve duplicates automatically.
+- Enabling does not resolve real-directory duplicates automatically.
 - Disabling removes only symbolic links.
 - Disabling fails if the target path is a real directory.
 - Duplicate detection scans configured roots and groups same-named skill directories.
+- Duplicate detection ignores platform symbolic links, because a link to the central library is already a managed `linked` state rather than a duplicate copy.
 - Duplicate removal is exposed as `rm-duplicate`.
 - `rm-duplicate` requires the user to choose which duplicate entry to keep when multiple entries exist.
 - `rm-duplicate` may support a non-interactive keep option for scripts, but interactive selection is part of the first version.
@@ -120,15 +130,19 @@ The first version intentionally avoids GitHub import, update management, package
 - Dry-run mode reports planned filesystem changes without creating, deleting, or restoring anything.
 - Query commands do not need JSON output in the first version.
 - The web dashboard should not be a one-to-one visual copy of CLI commands.
-- The web dashboard should expose task-oriented controls:
-  - Row-level `Detail` plus target-platform `Enable` / `Disable` actions for each skill.
-  - Selection checkboxes for multi-skill operations.
-  - Left-side action panel for batch enable, batch disable, duplicate inspection, backup listing, and latest-backup restore.
-  - Right-side top controls for search, target platform selection, and `All` / `Enabled` / `Missing` / `Duplicates` filters.
+- The web dashboard should expose task-oriented desktop views:
+  - `Skills`: target-platform search, status filters, row-level `Detail`, target-platform `Enable` / `Disable`, and duplicate entry points.
+  - `Duplicates`: duplicate groups, explicit keep-path selection, single duplicate resolution, and one-click resolution for central-library-backed duplicates.
+  - `Backups`: backup listing and restore actions.
+  - `Settings`: configured library and platform root inspection.
+- The skills view should support selection checkboxes for multi-skill enable and disable operations.
 - The web dashboard should expose platform status with product terms only: `linked`, `missing`, and `duplicate`.
 - `linked` means the platform skill is a symlink to the central library.
 - `missing` means the platform managed root does not contain that skill.
 - `duplicate` means the platform managed root contains a same-named real directory rather than a managed symlink.
+- Row-level web `Resolve duplicate` should navigate users to the duplicates workflow rather than silently deleting files from the skills table.
+- Single web `Resolve duplicate` should keep the selected path, back up removed entries, and when the selected path is the central library, recreate removed managed platform entries as symbolic links.
+- Web `Resolve all duplicates` should keep the central library copy for every resolvable duplicate group, back up and replace managed platform real directories with symbolic links, leave existing symbolic links untouched, skip groups without a central library copy, and show resolved, skipped, and failed result sections.
 - The web dashboard targets desktop browser usage only; narrow mobile layouts are not a first-version requirement.
 - Web actions that mutate skill files must require an explicit confirmation dialog before execution.
 - Web actions should reuse the same conservative filesystem operations as the CLI.
@@ -150,6 +164,7 @@ The first version intentionally avoids GitHub import, update management, package
 - Disable tests should verify that disabling refuses to delete real directories.
 - Duplicate detection tests should verify grouping by directory name across multiple roots.
 - Duplicate detection tests should verify that frontmatter `name` differences do not override directory-name identity.
+- Duplicate detection tests should verify that managed platform symbolic links are not reported as duplicate skills.
 - Duplicate removal tests should verify that the selected keep entry remains.
 - Duplicate removal tests should verify that removed real directories are backed up and deleted.
 - Duplicate removal tests should verify that removed symbolic links are recorded as links and deleted.
@@ -162,7 +177,9 @@ The first version intentionally avoids GitHub import, update management, package
 - Dry-run tests should verify that write commands report intended actions without changing the filesystem.
 - CLI smoke tests should verify the main commands parse expected flags and delegate to the correct behavior.
 - Node's built-in test runner is sufficient for the first version.
-- Web tests should verify the dashboard exposes the agreed management controls and that web actions delegate to the same filesystem behavior as the CLI.
+- Web tests should verify the dashboard exposes the agreed management controls and that web actions delegate to the same conservative filesystem behavior as the CLI.
+- Web tests should verify that single duplicate resolution preserves existing links, replaces removed managed real directories with links when the central library is kept, and does not leave the skill marked as a duplicate.
+- Web tests should verify that one-click duplicate resolution resolves central-library-backed groups, skips ambiguous groups without a central library copy, and reports resolved, skipped, and failed results.
 
 ## Out of Scope
 

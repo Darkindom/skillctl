@@ -50,10 +50,13 @@ skillctl web --port 1717
 
 The dashboard is designed for desktop browser usage. It provides:
 
-- Search, platform selection, and `All` / `Enabled` / `Missing` / `Duplicates` filters.
-- Row-level `Detail`, `Enable`, and `Disable` actions.
+- Sidebar views for `Skills`, `Duplicates`, `Backups`, and `Settings`.
+- Search, platform selection, and target-platform `All` / `linked` / `missing` / `duplicate` filters.
+- Row-level `Detail`, `Enable`, `Disable`, and `Resolve duplicate` actions.
 - Selection checkboxes for batch enable and disable operations.
-- Maintenance actions for finding duplicates, listing backups, and restoring the latest backup.
+- A dedicated `Duplicates` view for choosing which path to keep, resolving one duplicate, or resolving all duplicates that have a central library copy.
+- A `Backups` view for restoring specific duplicate-removal backups when the filesystem is safe.
+- A `Settings` view for inspecting the configured central library and platform roots.
 - Confirmation dialogs before file-changing actions run.
 
 Platform status labels in the dashboard:
@@ -61,6 +64,14 @@ Platform status labels in the dashboard:
 - `linked`: the platform skill is a symlink to the central library.
 - `missing`: the platform does not have that skill.
 - `duplicate`: the platform has a same-named real directory instead of a managed symlink.
+
+Linked platform skills are not treated as duplicates. Duplicate detection is for real same-named skill directories that could contain divergent local edits.
+
+The CLI and web dashboard share the same conservative backup model, but their product workflows differ:
+
+- `skillctl rm-duplicate` backs up and removes duplicate entries while keeping the selected path. It is a low-level CLI operation for explicit filesystem cleanup.
+- Web `Resolve duplicate` keeps the selected path, backs up removed real directories, and when the kept path is the central library, replaces removed managed platform entries with symlinks. The skill ends in the `linked` state instead of becoming `missing`.
+- Web `Resolve all duplicates` uses the central library copy as the canonical source when it exists, leaves existing links untouched, skips duplicate groups without a central library copy, and reports resolved, skipped, and failed items separately.
 
 ## Development
 
